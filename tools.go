@@ -8,6 +8,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/fatih/color"
+)
+
+// Inisialisasi warna
+var (
+	red    = color.New(color.FgRed).SprintFunc()      // Untuk kerentanan
+	yellow = color.New(color.FgYellow).SprintFunc()   // Untuk peringatan
+	green  = color.New(color.FgHiGreen).SprintFunc()  // Hijau neon untuk perbaikan dan kelulusan scan
+	blue   = color.New(color.FgBlue).SprintFunc()     // Untuk informasi lainnya
 )
 
 // detectOS identifies the operating system
@@ -43,17 +53,26 @@ func detectLanguageVersions() map[string]string {
 func scanVulnerabilities(code string) []string {
 	vulns := []string{}
 
-	// Deteksi akses file tanpa validasi path
 	if strings.Contains(code, "os.ReadFile(") {
-		vulns = append(vulns, "[WARNING] Possible arbitrary file read vulnerability: `os.ReadFile(filePath)` detected.")
+		vulns = append(vulns, yellow("[WARNING] ")+"Possible arbitrary file read vulnerability: "+red("`os.ReadFile(filePath)`")+" detected.")
 	}
 
-	// Deteksi path traversal
 	if strings.Contains(code, "../") || strings.Contains(code, "..\\") {
-		vulns = append(vulns, "[WARNING] Possible path traversal attack detected: '../' or '..\\'.")
+		vulns = append(vulns, yellow("[WARNING] ")+"Possible path traversal attack detected: "+red("'../' or '..\\'")+".")
 	}
 
 	return vulns
+}
+
+// findLineNumber menemukan nomor baris pertama dari pola tertentu dalam kode
+func findLineNumber(code, pattern string) int {
+	lines := strings.Split(code, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, pattern) {
+			return i + 1
+		}
+	}
+	return -1
 }
 
 // replaceVulnerabilities mengganti os.ReadFile(filePath) dengan metode aman
@@ -70,14 +89,20 @@ data, err := os.ReadFile(safePath)`,
 	}
 
 	modifiedCode := code
-	report := []string{}
+	type replacementDetail struct {
+		line    int
+		before  string
+		after   string
+	}
+	var report []replacementDetail
 
 	for vuln, safe := range replacements {
 		if strings.Contains(code, vuln) {
-			fmt.Printf("\n [DETECTED] Vulnerable pattern found: `%s`\n", vuln)
-			fmt.Printf("Location: Inside the scanned file\n")
-			fmt.Printf("Suggested Fix: Replace with a safer version\n")
-			fmt.Printf("\n Do you want to replace it? (y/n): ")
+			lineNum := findLineNumber(code, vuln)
+			fmt.Printf("\n %s Vulnerable pattern found: %s\n", red("[DETECTED]"), red("`"+vuln+"`"))
+			fmt.Printf("%s Line %d\n", blue("Location:"), lineNum)
+			fmt.Printf("%s Replace with a safer version\n", blue("Suggested Fix:"))
+			fmt.Printf("\n %s ", blue("Do you want to replace it? (y/n):"))
 
 			scanner := bufio.NewScanner(os.Stdin)
 			scanner.Scan()
@@ -85,18 +110,24 @@ data, err := os.ReadFile(safePath)`,
 
 			if response == "y" {
 				modifiedCode = strings.ReplaceAll(modifiedCode, vuln, safe)
-				report = append(report, fmt.Sprintf(" Replaced `%s` with safer code.", vuln))
+				report = append(report, replacementDetail{
+					line:   lineNum,
+					before: vuln,
+					after:  safe,
+				})
 			}
 		}
 	}
 
-	fmt.Println("\n Replacement Report:")
+	fmt.Println("\n" + blue(" Replacement Report:"))
 	if len(report) > 0 {
-		for _, r := range report {
-			fmt.Println(r)
+		for i, r := range report {
+			fmt.Printf(" %s %d:\n", blue("Replacement"), i+1)
+			fmt.Printf("   %s %s (Line %d)\n", red("Before Replacement:"), red("`"+r.before+"`"), r.line)
+			fmt.Printf("   %s %s\n", green("After Replacement:"), green("`"+r.after+"`"))
 		}
 	} else {
-		fmt.Println("No replacements made.")
+		fmt.Println(green("No replacements made."))
 	}
 
 	return modifiedCode
@@ -111,59 +142,53 @@ func readFile(filePath string) (string, error) {
 	return string(data), nil
 }
 
-// writeFile menyimpan kode yang sudah diperbaiki ke file baru
+// writeFile menyimpan kode yang sudah diperbaiki ke file asli
 func writeFile(filePath string, content string) error {
-	newFilePath := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + "_fixed" + filepath.Ext(filePath)
-	err := os.WriteFile(newFilePath, []byte(content), 0644)
+	err := os.WriteFile(filePath, []byte(content), 0644)
 	if err != nil {
 		return err
 	}
-	fmt.Println("\n Updated file saved as:", newFilePath)
+	fmt.Printf("\n %s %s\n", green("File has been updated at:"), filePath)
 	return nil
 }
 
 func main() {
-	fmt.Println("Detecting OS...")
-	fmt.Println("Operating System:", detectOS())
+	fmt.Println(blue("Detecting OS..."))
+	fmt.Printf("%s %s\n", blue("Operating System:"), detectOS())
 
-	fmt.Println("\nDetecting Installed Programming Language Versions...")
+	fmt.Println(blue("\nDetecting Installed Programming Language Versions..."))
 	versions := detectLanguageVersions()
 	for lang, version := range versions {
-		fmt.Printf("%s: %s\n", lang, version)
+		fmt.Printf("%s: %s\n", blue(lang), version)
 	}
 
-	// Meminta pengguna memasukkan path file yang akan dipindai
-	fmt.Print("\n Enter the path of the file to scan: ")
+	fmt.Print(blue("\n Enter the path of the file to scan: "))
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
 	filePath := scanner.Text()
 
-	// Membaca file
-	fmt.Println("\n Reading file:", filePath)
+	fmt.Printf("\n %s %s\n", blue("Reading file:"), filePath)
 	code, err := readFile(filePath)
 	if err != nil {
-		fmt.Println("Error reading file:", err)
+		fmt.Printf("%s %s\n", red("Error reading file:"), err)
 		return
 	}
 
-	// Memindai file dari kerentanan
-	fmt.Println("\nScanning for vulnerabilities...")
+	fmt.Println(blue("\nScanning for vulnerabilities..."))
 	vulns := scanVulnerabilities(code)
 	if len(vulns) > 0 {
 		for _, vuln := range vulns {
 			fmt.Println(vuln)
 		}
 	} else {
-		fmt.Println("No vulnerabilities found.")
+		fmt.Println(green("No vulnerabilities found."))
 	}
 
-	// Memperbaiki file
-	fmt.Println("\n Replacing vulnerabilities...")
+	fmt.Println(blue("\n Replacing vulnerabilities..."))
 	safeCode := replaceVulnerabilities(code)
 
-	// Menyimpan file yang telah diperbaiki
 	err = writeFile(filePath, safeCode)
 	if err != nil {
-		fmt.Println(" Error saving file:", err)
+		fmt.Printf("%s %s\n", red("Error saving file:"), err)
 	}
 }
